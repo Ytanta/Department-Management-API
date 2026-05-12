@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,10 +20,8 @@ const (
 )
 
 type DeleteDepartmentOptions struct {
-	Mode DeleteMode
-
-	ReassignEmployeesTo uint
-
+	Mode                    DeleteMode
+	ReassignEmployeesTo     uint
 	PromoteChildrenParentID *uint
 }
 
@@ -44,6 +41,7 @@ func (s *DepartmentService) CreateDepartment(ctx context.Context, name string, p
 	}
 
 	var created *domain.Department
+
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if parentID != nil {
 			parent, err := s.store.GetByID(ctx, tx, *parentID)
@@ -64,6 +62,7 @@ func (s *DepartmentService) CreateDepartment(ctx context.Context, name string, p
 		}
 
 		now := time.Now().UTC()
+
 		d := &domain.Department{
 			Name:      name,
 			ParentID:  parentID,
@@ -78,10 +77,7 @@ func (s *DepartmentService) CreateDepartment(ctx context.Context, name string, p
 		return nil
 	})
 
-	if err != nil {
-		return nil, err
-	}
-	return created, nil
+	return created, err
 }
 
 func (s *DepartmentService) MoveDepartment(ctx context.Context, id uint, newParentID *uint) error {
@@ -98,6 +94,7 @@ func (s *DepartmentService) MoveDepartment(ctx context.Context, id uint, newPare
 			if *newParentID == id {
 				return domain.ErrDepartmentCycle
 			}
+
 			parent, err := s.store.GetByID(ctx, tx, *newParentID)
 			if err != nil {
 				return err
@@ -119,8 +116,8 @@ func (s *DepartmentService) MoveDepartment(ctx context.Context, id uint, newPare
 	})
 }
 
-func (s *DepartmentService) GetDepartmentTree(ctx context.Context, rootID uint, includeEmployees bool, maxDepth int) (*DepartmentTreeNode, error) {
-	node, err := tree.Load(ctx, s.db, rootID, maxDepth, includeEmployees)
+func (s *DepartmentService) GetDepartmentTree(ctx context.Context, rootID uint, includeEmployees bool, maxDepth int, sortBy string) (*tree.Node, error) {
+	node, err := tree.Load(ctx, s.db, rootID, maxDepth, includeEmployees, sortBy)
 	if err != nil {
 		if errors.Is(err, tree.ErrNotFound) {
 			return nil, domain.ErrNotFound
@@ -157,12 +154,15 @@ func (s *DepartmentService) PatchDepartment(ctx context.Context, id uint, in Pat
 		}
 
 		finalParent := node.ParentID
+
 		if in.HasParent {
 			finalParent = in.ParentID
+
 			if in.ParentID != nil {
 				if *in.ParentID == id {
 					return domain.ErrDepartmentCycle
 				}
+
 				desc, err := s.store.IsStrictDescendant(ctx, tx, id, *in.ParentID)
 				if err != nil {
 					return err
@@ -174,7 +174,7 @@ func (s *DepartmentService) PatchDepartment(ctx context.Context, id uint, in Pat
 		}
 
 		nameChanged := in.Name != nil && finalName != node.Name
-		parentChanged := in.HasParent && !uintPtrEqual(in.ParentID, node.ParentID)
+		parentChanged := in.HasParent
 
 		if nameChanged || parentChanged {
 			dup, err := s.store.ExistsDepartmentWithNameUnderParent(ctx, tx, finalName, finalParent, &id)
@@ -202,6 +202,7 @@ func (s *DepartmentService) PatchDepartment(ctx context.Context, id uint, in Pat
 		if err != nil {
 			return err
 		}
+
 		out = updated
 		return nil
 	})
@@ -209,129 +210,71 @@ func (s *DepartmentService) PatchDepartment(ctx context.Context, id uint, in Pat
 	return out, err
 }
 
-func uintPtrEqual(a, b *uint) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return *a == *b
-}
-
 func (s *DepartmentService) DeleteDepartment(ctx context.Context, id uint, opts DeleteDepartmentOptions) error {
 	switch opts.Mode {
 	case DeleteModeCascade:
-		return s.deleteCascade(ctx, id)
+		res := s.db.WithContext(ctx).Delete(&domain.Department{}, id)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return domain.ErrNotFound
+		}
+		return nil
+
 	case DeleteModeReassign:
-		return s.deleteReassign(ctx, id, opts)
+		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if opts.ReassignEmployeesTo == 0 {
+				return errors.New("reassign requires ReassignEmployeesTo")
+			}
+
+			if opts.ReassignEmployeesTo == id {
+				return domain.ErrReassignTargetInvalid
+			}
+
+			var target domain.Department
+			if err := tx.First(&target, opts.ReassignEmployeesTo).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return domain.ErrNotFound
+				}
+				return err
+			}
+
+			var currentDept domain.Department
+			if err := tx.First(&currentDept, id).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return domain.ErrNotFound
+				}
+				return err
+			}
+
+			if err := tx.Model(&domain.Employee{}).
+				Where("department_id = ?", id).
+				Update("department_id", opts.ReassignEmployeesTo).Error; err != nil {
+				return err
+			}
+
+			var newParent *uint
+			if opts.PromoteChildrenParentID != nil {
+				newParent = opts.PromoteChildrenParentID
+			} else {
+				newParent = currentDept.ParentID
+			}
+
+			if newParent != nil && *newParent == id {
+				return domain.ErrReassignTargetInvalid
+			}
+
+			if err := tx.Model(&domain.Department{}).
+				Where("parent_id = ?", id).
+				Update("parent_id", newParent).Error; err != nil {
+				return err
+			}
+
+			return tx.Delete(&domain.Department{}, id).Error
+		})
+
 	default:
 		return errors.New("unknown delete mode")
 	}
-}
-
-func (s *DepartmentService) deleteCascade(ctx context.Context, id uint) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		node, err := s.store.GetByID(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if node == nil {
-			return domain.ErrNotFound
-		}
-
-		flat, err := s.store.ListEntireSubtreeFlat(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if len(flat) == 0 {
-			return domain.ErrNotFound
-		}
-
-		ids := departmentIDsSortedByDepthDesc(flat)
-
-		if err := s.store.DeleteEmployeesByDepartmentIDs(ctx, tx, ids); err != nil {
-			return err
-		}
-		return s.store.DeleteDepartmentsByIDs(ctx, tx, ids)
-	})
-}
-
-func (s *DepartmentService) deleteReassign(ctx context.Context, id uint, opts DeleteDepartmentOptions) error {
-	if opts.ReassignEmployeesTo == 0 {
-		return errors.New("reassign requires ReassignEmployeesTo")
-	}
-
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		dept, err := s.store.GetByID(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if dept == nil {
-			return domain.ErrNotFound
-		}
-
-		targetEmpDept, err := s.store.GetByID(ctx, tx, opts.ReassignEmployeesTo)
-		if err != nil {
-			return err
-		}
-		if targetEmpDept == nil {
-			return domain.ErrNotFound
-		}
-		if opts.ReassignEmployeesTo == id {
-			return domain.ErrReassignTargetInvalid
-		}
-
-		var promoteTo *uint
-		if opts.PromoteChildrenParentID != nil {
-			p, err := s.store.GetByID(ctx, tx, *opts.PromoteChildrenParentID)
-			if err != nil {
-				return err
-			}
-			if p == nil {
-				return domain.ErrNotFound
-			}
-			promoteTo = opts.PromoteChildrenParentID
-		} else {
-			promoteTo = dept.ParentID
-		}
-
-		if promoteTo != nil && *promoteTo == id {
-			return domain.ErrReassignTargetInvalid
-		}
-
-		if err := s.store.UpdateEmployeesDepartment(ctx, tx, []uint{id}, opts.ReassignEmployeesTo); err != nil {
-			return err
-		}
-		if err := s.store.UpdateDirectChildrenParent(ctx, tx, id, promoteTo); err != nil {
-			return err
-		}
-		return s.store.DeleteDepartmentsByIDs(ctx, tx, []uint{id})
-	})
-}
-
-func departmentIDsSortedByDepthDesc(flat []DepartmentFlat) []uint {
-	seen := make(map[uint]struct{}, len(flat))
-	rows := make([]DepartmentFlat, 0, len(flat))
-
-	for _, r := range flat {
-		if _, ok := seen[r.ID]; ok {
-			continue
-		}
-		seen[r.ID] = struct{}{}
-		rows = append(rows, r)
-	}
-
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].Depth != rows[j].Depth {
-			return rows[i].Depth > rows[j].Depth
-		}
-		return rows[i].ID > rows[j].ID
-	})
-
-	out := make([]uint, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, r.ID)
-	}
-	return out
 }

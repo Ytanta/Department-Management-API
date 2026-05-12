@@ -25,20 +25,29 @@ func (r *EmployeeRepository) FindByID(ctx context.Context, tx *gorm.DB, id uint)
 	var e domain.Employee
 	err := r.conn(tx).WithContext(ctx).Take(&e, id).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
 		return nil, err
 	}
 	return &e, nil
 }
 
 func (r *EmployeeRepository) FindChildren(ctx context.Context, tx *gorm.DB, departmentID uint) ([]domain.Employee, error) {
-	return r.FindByDepartmentID(ctx, tx, departmentID)
+	return r.FindByDepartmentID(ctx, tx, departmentID, "full_name")
 }
 
-func (r *EmployeeRepository) FindByDepartmentID(ctx context.Context, tx *gorm.DB, departmentID uint) ([]domain.Employee, error) {
+func (r *EmployeeRepository) FindByDepartmentID(ctx context.Context, tx *gorm.DB, departmentID uint, sortBy string) ([]domain.Employee, error) {
 	var out []domain.Employee
+
+	orderClause := "full_name ASC, id ASC"
+	if sortBy == "created_at" {
+		orderClause = "created_at DESC, id ASC"
+	}
+
 	err := r.conn(tx).WithContext(ctx).
 		Where("department_id = ?", departmentID).
-		Order("full_name ASC, id ASC").
+		Order(orderClause).
 		Find(&out).Error
 	return out, err
 }
@@ -58,14 +67,20 @@ func (r *EmployeeRepository) Delete(ctx context.Context, tx *gorm.DB, id uint) e
 	return r.conn(tx).WithContext(ctx).Delete(&domain.Employee{}, id).Error
 }
 
-func (r *EmployeeRepository) ListByDepartmentIDs(ctx context.Context, tx *gorm.DB, departmentIDs []uint) ([]domain.Employee, error) {
+func (r *EmployeeRepository) ListByDepartmentIDs(ctx context.Context, tx *gorm.DB, departmentIDs []uint, sortBy string) ([]domain.Employee, error) {
 	if len(departmentIDs) == 0 {
 		return nil, nil
 	}
+
+	orderClause := "department_id ASC, full_name ASC, id ASC"
+	if sortBy == "created_at" {
+		orderClause = "department_id ASC, created_at DESC, id ASC"
+	}
+
 	var out []domain.Employee
 	err := r.conn(tx).WithContext(ctx).
 		Where("department_id IN ?", departmentIDs).
-		Order("department_id ASC, full_name ASC, id ASC").
+		Order(orderClause).
 		Find(&out).Error
 	return out, err
 }

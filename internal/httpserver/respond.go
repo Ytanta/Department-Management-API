@@ -1,7 +1,7 @@
 package httpserver
 
 import (
-	deptsvc "department-api/internal/domain"
+	"department-api/internal/domain"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -26,17 +26,26 @@ func mapServiceError(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
 	}
+
 	switch {
-	case errors.Is(err, deptsvc.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, deptsvc.ErrDuplicateDepartmentName),
-		errors.Is(err, deptsvc.ErrDepartmentCycle),
-		errors.Is(err, deptsvc.ErrReassignTargetInvalid):
-		writeError(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, deptsvc.ErrInvalidInput):
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+	case errors.Is(err, domain.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "resource not found")
+
+	case errors.Is(err, domain.ErrDuplicateDepartmentName):
+		writeError(w, http.StatusConflict, "conflict", "department name already exists under parent")
+
+	case errors.Is(err, domain.ErrDepartmentCycle):
+		writeError(w, http.StatusConflict, "conflict", "cycle detected in department tree")
+
+	case errors.Is(err, domain.ErrReassignTargetInvalid):
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid reassign target department")
+
+	case errors.Is(err, domain.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid input")
+
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
+
 	return true
 }

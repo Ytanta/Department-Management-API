@@ -61,18 +61,12 @@ func (h *EmployeeHandler) PostEmployee(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toEmployeeResponse(e))
 }
 
-func toEmployeeResponse(e *domain.Employee) employeeResponse {
-	return employeeResponse{
-		ID:           e.ID,
-		DepartmentID: e.DepartmentID,
-		FullName:     e.FullName,
-		Position:     e.Position,
-		HiredAt:      e.HiredAt.Format("2006-01-02"),
-		CreatedAt:    e.CreatedAt,
-	}
-}
-
 func (h *EmployeeHandler) GetEmployee(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+
 	id, err := parseUintPathValue(r, "emp_id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
@@ -88,6 +82,11 @@ func (h *EmployeeHandler) GetEmployee(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EmployeeHandler) PatchEmployee(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+
 	id, err := parseUintPathValue(r, "emp_id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid employee id")
@@ -104,7 +103,15 @@ func (h *EmployeeHandler) PatchEmployee(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	err = h.Svc.UpdateEmployee(r.Context(), id, req.FullName, req.Position)
+	fName := strings.TrimSpace(req.FullName)
+	fPos := strings.TrimSpace(req.Position)
+
+	if fName == "" && fPos == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "full_name or position required")
+		return
+	}
+
+	err = h.Svc.UpdateEmployee(r.Context(), id, fName, fPos)
 	if mapServiceError(w, err) {
 		return
 	}
@@ -113,6 +120,11 @@ func (h *EmployeeHandler) PatchEmployee(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *EmployeeHandler) DeleteEmployee(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+
 	id, err := parseUintPathValue(r, "emp_id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
@@ -125,4 +137,15 @@ func (h *EmployeeHandler) DeleteEmployee(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func toEmployeeResponse(e *domain.Employee) employeeResponse {
+	return employeeResponse{
+		ID:           e.ID,
+		DepartmentID: e.DepartmentID,
+		FullName:     e.FullName,
+		Position:     e.Position,
+		HiredAt:      e.HiredAt.Format("2006-01-02"),
+		CreatedAt:    e.CreatedAt,
+	}
 }

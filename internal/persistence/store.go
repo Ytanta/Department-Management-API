@@ -56,6 +56,7 @@ func (s *Store) ListEntireSubtreeFlat(ctx context.Context, db *gorm.DB, rootID u
 	if err != nil {
 		return nil, err
 	}
+
 	out := make([]services.DepartmentFlat, len(rows))
 	for i, r := range rows {
 		out[i] = services.DepartmentFlat{

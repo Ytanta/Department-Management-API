@@ -55,20 +55,20 @@ type employeeRow struct {
 	HiredAt      time.Time `gorm:"column:hired_at"`
 }
 
-func Load(ctx context.Context, db *gorm.DB, rootID uint, maxDepth int, includeEmployees bool) (*Node, error) {
+func Load(ctx context.Context, db *gorm.DB, rootID uint, maxDepth int, includeEmployees bool, sortBy string) (*Node, error) {
 	md := ClampMaxDepth(maxDepth)
 
 	var flat []deptFlat
 	if err := db.WithContext(ctx).Raw(`
 WITH RECURSIVE sub AS (
-	SELECT id, name, parent_id, 0::int AS depth
-	FROM departments
-	WHERE id = ?
-	UNION ALL
-	SELECT d.id, d.name, d.parent_id, s.depth + 1
-	FROM departments d
-	INNER JOIN sub s ON d.parent_id = s.id
-	WHERE s.depth < ?
+    SELECT id, name, parent_id, 0::int AS depth
+    FROM departments
+    WHERE id = ?
+    UNION ALL
+    SELECT d.id, d.name, d.parent_id, s.depth + 1
+    FROM departments d
+    INNER JOIN sub s ON d.parent_id = s.id
+    WHERE s.depth < ?
 )
 SELECT id, name, parent_id, depth
 FROM sub
@@ -88,7 +88,7 @@ ORDER BY depth ASC, id ASC
 			ids[i] = flat[i].ID
 		}
 
-		m, err := loadEmployeesByDepartmentIDs(ctx, db, ids)
+		m, err := loadEmployeesByDepartmentIDs(ctx, db, ids, sortBy)
 		if err != nil {
 			return nil, err
 		}
@@ -103,11 +103,16 @@ ORDER BY depth ASC, id ASC
 	return root, nil
 }
 
-func loadEmployeesByDepartmentIDs(ctx context.Context, db *gorm.DB, departmentIDs []uint) (map[uint][]Employee, error) {
+func loadEmployeesByDepartmentIDs(ctx context.Context, db *gorm.DB, departmentIDs []uint, sortBy string) (map[uint][]Employee, error) {
 	out := make(map[uint][]Employee)
 
 	if len(departmentIDs) == 0 {
 		return out, nil
+	}
+
+	orderClause := "full_name ASC, id ASC"
+	if sortBy == "created_at" {
+		orderClause = "created_at DESC, id ASC"
 	}
 
 	var rows []employeeRow
@@ -115,7 +120,7 @@ func loadEmployeesByDepartmentIDs(ctx context.Context, db *gorm.DB, departmentID
 		Table("employees").
 		Select("id", "department_id", "full_name", "position", "hired_at").
 		Where("department_id IN ?", departmentIDs).
-		Order("full_name ASC, id ASC").
+		Order(orderClause).
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err

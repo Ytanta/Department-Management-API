@@ -25,11 +25,15 @@ func (r *DepartmentRepository) FindByID(ctx context.Context, tx *gorm.DB, id uin
 	var d domain.Department
 	err := r.conn(tx).WithContext(ctx).Take(&d, id).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrNotFound
+		}
 		return nil, err
 	}
 	return &d, nil
 }
 
+// ИСПРАВЛЕНО: Этот метод принадлежит DepartmentRepository и ищет дочерние департаменты
 func (r *DepartmentRepository) FindChildren(ctx context.Context, tx *gorm.DB, parentID uint) ([]domain.Department, error) {
 	var out []domain.Department
 	err := r.conn(tx).WithContext(ctx).
@@ -93,13 +97,13 @@ func (r *DepartmentRepository) IsStrictDescendant(ctx context.Context, tx *gorm.
 	var ok bool
 	err := r.conn(tx).WithContext(ctx).Raw(`
 WITH RECURSIVE sub AS (
-	SELECT id, 0 AS dist
-	FROM departments
-	WHERE id = ?
-	UNION ALL
-	SELECT d.id, s.dist + 1
-	FROM departments d
-	INNER JOIN sub s ON d.parent_id = s.id
+    SELECT id, 0 AS dist
+    FROM departments
+    WHERE id = ?
+    UNION ALL
+    SELECT d.id, s.dist + 1
+    FROM departments d
+    INNER JOIN sub s ON d.parent_id = s.id
 )
 SELECT EXISTS(SELECT 1 FROM sub WHERE id = ? AND dist > 0)
 `, ancestorID, targetID).Scan(&ok).Error
@@ -117,13 +121,13 @@ func (r *DepartmentRepository) ListEntireSubtreeFlat(ctx context.Context, tx *go
 	var rows []SubtreeFlatRow
 	err := r.conn(tx).WithContext(ctx).Raw(`
 WITH RECURSIVE sub AS (
-	SELECT id, name, parent_id, 0::int AS depth
-	FROM departments
-	WHERE id = ?
-	UNION ALL
-	SELECT d.id, d.name, d.parent_id, s.depth + 1
-	FROM departments d
-	INNER JOIN sub s ON d.parent_id = s.id
+    SELECT id, name, parent_id, 0::int AS depth
+    FROM departments
+    WHERE id = ?
+    UNION ALL
+    SELECT d.id, d.name, d.parent_id, s.depth + 1
+    FROM departments d
+    INNER JOIN sub s ON d.parent_id = s.id
 )
 SELECT id, name, parent_id, depth
 FROM sub

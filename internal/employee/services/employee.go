@@ -2,6 +2,7 @@ package employeeservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -75,7 +76,10 @@ func (s *Service) CreateEmployee(
 func (s *Service) GetEmployee(ctx context.Context, id uint) (*domain.Employee, error) {
 	emp, err := s.emp.GetEmployeeByID(ctx, s.db, id)
 	if err != nil {
-		return nil, domain.ErrNotFound
+		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, domain.ErrNotFound) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
 	}
 
 	if emp == nil {
@@ -88,16 +92,37 @@ func (s *Service) GetEmployee(ctx context.Context, id uint) (*domain.Employee, e
 func (s *Service) UpdateEmployee(ctx context.Context, id uint, fullName, position string) error {
 	updates := make(map[string]interface{})
 
-	if fullName != "" {
-		updates["full_name"] = strings.TrimSpace(fullName)
-	}
-	if position != "" {
-		updates["position"] = strings.TrimSpace(position)
+	fName := strings.TrimSpace(fullName)
+	if fName != "" {
+		updates["full_name"] = fName
 	}
 
-	return s.emp.UpdateEmployee(ctx, s.db, id, updates)
+	pos := strings.TrimSpace(position)
+	if pos != "" {
+		updates["position"] = pos
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	err := s.emp.UpdateEmployee(ctx, s.db, id, updates)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) DeleteEmployee(ctx context.Context, id uint) error {
-	return s.emp.DeleteEmployee(ctx, s.db, id)
+	err := s.emp.DeleteEmployee(ctx, s.db, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	return nil
 }

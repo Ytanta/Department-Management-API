@@ -2,9 +2,6 @@
 
 package httpserver_test
 
-// Интеграционные тесты требуют Docker (testcontainers).
-// Запуск: go test -tags=integration ./internal/httpserver -count=1
-
 import (
 	"bytes"
 	"context"
@@ -154,11 +151,11 @@ func TestIntegration_CreateEmployee(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	var emp struct {
-		ID             uint   `json:"id"`
-		DepartmentID   uint   `json:"department_id"`
-		FullName       string `json:"full_name"`
-		Position       string `json:"position"`
-		HiredAt        string `json:"hired_at"`
+		ID           uint   `json:"id"`
+		DepartmentID uint   `json:"department_id"`
+		FullName     string `json:"full_name"`
+		Position     string `json:"position"`
+		HiredAt      string `json:"hired_at"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&emp))
 	assert.NotZero(t, emp.ID)
@@ -166,7 +163,6 @@ func TestIntegration_CreateEmployee(t *testing.T) {
 	assert.Equal(t, "Jane Doe", emp.FullName)
 }
 
-// TestIntegration_MoveDepartmentCycle — интеграционный сценарий: попытка перенести отдел под своего потомка → 409.
 func TestIntegration_MoveDepartmentCycle(t *testing.T) {
 	srv := newIntegrationServer(t)
 	defer srv.Close()

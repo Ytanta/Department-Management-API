@@ -67,19 +67,30 @@ func (h *DepartmentHandler) GetDepartment(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	depth, err := parseDepthQuery(r.URL.Query().Get("depth"))
+	q := r.URL.Query()
+
+	depth, err := parseDepthQuery(q.Get("depth"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 
-	includeEmployees, err := parseBoolQuery(r.URL.Query().Get("include_employees"))
+	includeEmployees, err := parseBoolQuery(q.Get("include_employees"), true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 
-	node, err := h.Svc.GetDepartmentTree(r.Context(), id, includeEmployees, depth)
+	sortBy := strings.TrimSpace(strings.ToLower(q.Get("sort_by")))
+	if sortBy == "" {
+		sortBy = "full_name"
+	}
+	if sortBy != "full_name" && sortBy != "created_at" {
+		writeError(w, http.StatusBadRequest, "bad_request", "sort_by must be full_name or created_at")
+		return
+	}
+
+	node, err := h.Svc.GetDepartmentTree(r.Context(), id, includeEmployees, depth, sortBy)
 	if mapServiceError(w, err) {
 		return
 	}
@@ -132,14 +143,13 @@ func (h *DepartmentHandler) DeleteDepartment(w http.ResponseWriter, r *http.Requ
 
 	q := r.URL.Query()
 	mode := deptsvc.DeleteMode(strings.ToLower(strings.TrimSpace(q.Get("mode"))))
+	
+	opts := deptsvc.DeleteDepartmentOptions{
+		Mode: mode,
+	}
 
 	switch mode {
 	case deptsvc.DeleteModeCascade:
-		if err := h.Svc.DeleteDepartment(r.Context(), id, deptsvc.DeleteDepartmentOptions{
-			Mode: deptsvc.DeleteModeCascade,
-		}); mapServiceError(w, err) {
-			return
-		}
 
 	case deptsvc.DeleteModeReassign:
 		reassignTo, err := parseUintQuery(q.Get("reassign_to_department_id"))
@@ -147,29 +157,23 @@ func (h *DepartmentHandler) DeleteDepartment(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "bad_request", "reassign_to_department_id is required and must be > 0")
 			return
 		}
+		opts.ReassignEmployeesTo = reassignTo
 
-		var promote *uint
 		if raw := strings.TrimSpace(q.Get("promote_children_parent_id")); raw != "" {
 			v, err := parseUintQuery(raw)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "bad_request", "invalid promote_children_parent_id")
 				return
 			}
-			promote = &v
-		}
-
-		opts := deptsvc.DeleteDepartmentOptions{
-			Mode:                    deptsvc.DeleteModeReassign,
-			ReassignEmployeesTo:     reassignTo,
-			PromoteChildrenParentID: promote,
-		}
-
-		if err := h.Svc.DeleteDepartment(r.Context(), id, opts); mapServiceError(w, err) {
-			return
+			opts.PromoteChildrenParentID = &v
 		}
 
 	default:
 		writeError(w, http.StatusBadRequest, "bad_request", "mode must be cascade or reassign")
+		return
+	}
+
+	if err := h.Svc.DeleteDepartment(r.Context(), id, opts); mapServiceError(w, err) {
 		return
 	}
 
@@ -231,7 +235,7 @@ func decodePatchDepartment(r *http.Request) (deptsvc.PatchDepartmentInput, error
 func parseDepthQuery(v string) (int, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return 0, nil
+		return 1, nil
 	}
 
 	d, err := strconv.Atoi(v)
@@ -246,16 +250,19 @@ func parseDepthQuery(v string) (int, error) {
 	return d, nil
 }
 
-func parseBoolQuery(v string) (bool, error) {
+func parseBoolQuery(v string, defaultValue bool) (bool, error) {
 	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return defaultValue, nil
+	}
 
 	switch v {
-	case "", "false", "0":
+	case "false", "0":
 		return false, nil
 	case "true", "1":
 		return true, nil
 	default:
-		return false, errors.New("invalid include_employees")
+		return false, errors.New("invalid boolean value")
 	}
 }
 
